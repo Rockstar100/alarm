@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import argparse
+import io
+import math
 import select
 import shlex
+import struct
 import sys
 import threading
 import time
+import wave
 from typing import Callable, Literal, Sequence
 
 from alarm.scheduler import Alarm, AlarmScheduler
@@ -23,9 +27,54 @@ Commands:
   quit / exit                      Stop the scheduler and exit
 
 Tips:
-  Past HH:MM rolls to tomorrow. Demo with: set +0m Now
+  Past HH:MM rolls to tomorrow.
+  Inside this prompt type exactly:  set +0m Now
   Ring prompt uses [d] dismiss / [s] snooze — not the alarm> REPL.
+  Run pytest in a normal shell, not inside alarm>.
 """
+
+# Cached soft chime WAV (built once).
+_CHIME_WAV: bytes | None = None
+
+
+def _build_chime_wav() -> bytes:
+    """Soft two-note sine chime — speakers, not the harsh PC-speaker Beep."""
+    sample_rate = 22050
+    amplitude = 16000  # leave headroom; softer than max int16
+
+    def tone(freq: float, duration: float, *, gap: float = 0.04) -> list[int]:
+        n = int(sample_rate * duration)
+        samples: list[int] = []
+        for i in range(n):
+            t = i / sample_rate
+            # Fast attack, gentle release — avoids click/harsh edges
+            env = min(1.0, i / (sample_rate * 0.02))
+            release = max(0.0, 1.0 - (i / n) ** 2)
+            sample = amplitude * env * release * math.sin(2 * math.pi * freq * t)
+            samples.append(int(sample))
+        samples.extend([0] * int(sample_rate * gap))
+        return samples
+
+    # C5 → E5 → G5 short arpeggio (pleasant, clearly an alarm)
+    pcm = []
+    pcm.extend(tone(523.25, 0.18))
+    pcm.extend(tone(659.25, 0.18))
+    pcm.extend(tone(783.99, 0.28, gap=0.0))
+
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(sample_rate)
+        wf.writeframes(b"".join(struct.pack("<h", s) for s in pcm))
+    return buf.getvalue()
+
+
+def _chime_wav() -> bytes:
+    global _CHIME_WAV
+    if _CHIME_WAV is None:
+        _CHIME_WAV = _build_chime_wav()
+    return _CHIME_WAV
 
 
 def _parse_id(raw: str, *, what: str) -> int:
@@ -41,13 +90,21 @@ def _parse_id(raw: str, *, what: str) -> int:
 
 
 def _beep_once() -> None:
+    """Play a soft generated chime through the default audio device."""
     try:
         import winsound
 
-        winsound.Beep(880, 350)
+        winsound.PlaySound(
+            _chime_wav(),
+            winsound.SND_MEMORY | winsound.SND_NODEFAULT,
+        )
+        return
     except Exception:
-        sys.stdout.write("\a")  # no winsound
-        sys.stdout.flush()
+        pass
+
+    # Last resort: terminal bell (no PC-speaker screech)
+    sys.stdout.write("\a")
+    sys.stdout.flush()
 
 
 def _banner(alarm: Alarm) -> str:
@@ -68,7 +125,7 @@ def _ring(
     *,
     input_fn: Callable[[str], str] = input,
     beep_fn: Callable[[], None] = _beep_once,
-    beep_interval: float = 1.0,
+    beep_interval: float = 0.85,
 ) -> Action:
     stop = threading.Event()
 
@@ -254,6 +311,10 @@ class AlarmApp:
         if not argv:
             return True
 
+        # Allow pasting notes like "# demo ..." without erroring.
+        if argv[0].startswith("#"):
+            return True
+
         cmd = argv[0].lower()
         args = list(argv[1:])
 
@@ -271,7 +332,10 @@ class AlarmApp:
             elif cmd == "snooze":
                 self._cmd_snooze(args)
             else:
-                print(f"Unknown command: {cmd!r}. Type 'help'.")
+                print(
+                    f"Unknown command: {cmd!r}. Type 'help'. "
+                    f"(Only set/list/cancel/snooze/quit work here.)"
+                )
         except KeyError as exc:
             # KeyError adds quotes around the text
             print(f"Error: {exc.args[0] if exc.args else exc}")

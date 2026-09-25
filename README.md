@@ -94,7 +94,7 @@ pytest
 | `help` | `help` |
 | `quit` | `quit` |
 
-Tip for demos: `set +0m Now` fires on the next scheduler tick (~0.5s).
+Tip for demos: at the `alarm>` prompt type exactly `set +0m Now` (not a shell command, not a comment).
 
 ## Tests
 
