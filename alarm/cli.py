@@ -117,9 +117,14 @@ def _ring(
 def _timed_readline(
     prompt: str,
     *,
-    timeout: float = 0.5,
+    timeout: float | None = None,
     wake: Callable[[], bool] | None = None,
 ) -> str | None:
+    """Read a line; return None when ``wake()`` becomes true.
+
+    ``timeout`` is optional. When omitted (default), wait until Enter or wake
+    so the prompt is not reprinted every few hundred milliseconds.
+    """
     if not sys.stdin.isatty():
         # piped, just wait for a line
         sys.stdout.write(prompt)
@@ -137,7 +142,7 @@ def _timed_readline(
 def _windows_timed_readline(
     prompt: str,
     *,
-    timeout: float,
+    timeout: float | None,
     wake: Callable[[], bool] | None,
 ) -> str | None:
     import msvcrt
@@ -145,9 +150,9 @@ def _windows_timed_readline(
     sys.stdout.write(prompt)
     sys.stdout.flush()
     buf: list[str] = []
-    deadline = time.monotonic() + timeout
+    deadline = None if timeout is None else time.monotonic() + timeout
 
-    while time.monotonic() < deadline:
+    while deadline is None or time.monotonic() < deadline:
         if wake is not None and wake():
             sys.stdout.write("\n")
             sys.stdout.flush()
@@ -184,20 +189,22 @@ def _windows_timed_readline(
 def _posix_timed_readline(
     prompt: str,
     *,
-    timeout: float,
+    timeout: float | None,
     wake: Callable[[], bool] | None,
 ) -> str | None:
     sys.stdout.write(prompt)
     sys.stdout.flush()
     buf: list[str] = []
-    deadline = time.monotonic() + timeout
+    deadline = None if timeout is None else time.monotonic() + timeout
 
-    while time.monotonic() < deadline:
+    while deadline is None or time.monotonic() < deadline:
         if wake is not None and wake():
             sys.stdout.write("\n")
             sys.stdout.flush()
             return None
-        remaining = max(0.0, min(0.1, deadline - time.monotonic()))
+        remaining = 0.1
+        if deadline is not None:
+            remaining = max(0.0, min(0.1, deadline - time.monotonic()))
         ready, _, _ = select.select([sys.stdin], [], [], remaining)
         if not ready:
             continue
@@ -323,7 +330,6 @@ class AlarmApp:
                 try:
                     line = _timed_readline(
                         "alarm> ",
-                        timeout=0.5,
                         wake=self.scheduler.has_pending,
                     )
                 except EOFError:

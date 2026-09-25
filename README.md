@@ -62,8 +62,8 @@ You can also pass an initial command: `python -m alarm set +30m Standup`.
 5. **Ring marks alarm inactive before the handler runs**  
    Prevents re-fire while the user is still at the dismiss/snooze prompt. Snooze reactivates the same id.
 
-6. **Timed REPL input with wake**  
-   The prompt polls every ~0.5s and wakes immediately when a due alarm is queued, so ringing does not wait for the user to press Enter first.
+6. **Wakeable REPL input**  
+   The prompt waits for Enter, but checks a wake flag so a due alarm can interrupt immediately and ring — without reprinting `alarm>` on a timer.
 
 ```text
 CLI / REPL ──► AlarmScheduler ──► in-memory store
